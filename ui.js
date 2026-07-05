@@ -597,6 +597,39 @@ function convertForeignObjectsToSvgText(svgRoot){
       if(lines.length === 0) lines = [''];
     }
 
+    // The lines above only account for EXPLICIT breaks. In the live foreignObject,
+    // long labels with no explicit break still wrap across multiple visual lines
+    // because the browser wraps text to fit the box's CSS width. Our plain <text>
+    // has no box to wrap against, so without doing this wrap ourselves a long
+    // label becomes one unbroken, center-anchored line that balloons out past its
+    // box on both sides and overlaps whatever node sits next to it.
+    let measureCtx;
+    try{
+      const canvas = document.createElement('canvas');
+      measureCtx = canvas.getContext('2d');
+      measureCtx.font = fontWeight + ' ' + fontSize + ' Inter, sans-serif';
+    }catch(e){ measureCtx = null; }
+
+    const maxLineWidth = Math.max(width - 12, 20); // small inner padding
+    function wrapLine(line){
+      if(!measureCtx || measureCtx.measureText(line).width <= maxLineWidth) return [line];
+      const words = line.split(' ');
+      const wrapped = [];
+      let current = '';
+      words.forEach(word=>{
+        const candidate = current ? current + ' ' + word : word;
+        if(measureCtx.measureText(candidate).width <= maxLineWidth || !current){
+          current = candidate;
+        } else {
+          wrapped.push(current);
+          current = word;
+        }
+      });
+      if(current) wrapped.push(current);
+      return wrapped;
+    }
+    lines = lines.flatMap(wrapLine);
+
     const textEl = document.createElementNS(SVG_NS, 'text');
     textEl.setAttribute('text-anchor', 'middle');
     textEl.setAttribute('fill', color);
