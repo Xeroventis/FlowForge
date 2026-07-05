@@ -156,6 +156,12 @@
 
   .empty-hint{color:var(--dim);font-size:13px;text-align:center;max-width:300px;}
 
+  .warning-banner{
+    display:none;align-items:center;gap:8px;background:#2b2408;border:1px solid #7a5f14;color:#facc15;
+    border-radius:8px;padding:8px 12px;font-size:12px;line-height:1.5;margin:0 0 8px 0;
+  }
+  .warning-banner.show{display:flex;}
+
   /* generated mermaid drawer */
   .mmd-drawer{
     position:absolute;left:0;right:0;bottom:0;max-height:45%;
@@ -297,6 +303,7 @@
         <span id="editorLabel">โค้ด Mermaid</span>
         <span class="status" id="status"><span class="led"></span><span id="statusText">พร้อมใช้งาน</span></span>
       </div>
+      <div class="warning-banner" id="warningBanner">⚠️ <span id="warningBannerText"></span></div>
       <textarea id="code" spellcheck="false"></textarea>
       <div class="samples" id="samples"></div>
     </div>
