@@ -4,6 +4,8 @@
 // Throws Error with a Thai message the UI layer can show directly if nothing
 // parseable is found (see convertCodeToMermaid at the bottom of this file).
 
+let nodeCounter = 0;
+let connectorCounter = 0;
 let nodeDefs = [];
 let edgeDefs = [];
 let contextStack = []; // stack of { type:'loop'|'switch', continueTarget, breakExits:[] }
