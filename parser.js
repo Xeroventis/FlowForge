@@ -69,6 +69,15 @@ function createParser(){
                               // matches the true ANSI/ISO 5807 "Display" symbol instead of a plain parallelogram
   };
 
+  // Shared wording for every terminal ("End") node, whether it comes from
+  // an explicit `return` or from control flow simply falling off the end
+  // of the function. Keeping this in one place means both cases read the
+  // same way ("จบ" / "จบ (return ...)") instead of the two previously
+  // drifting apart ("return ค่า" vs. plain "จบ").
+  function endLabel(text){
+    return text ? ('จบ (return ' + text + ')') : 'จบ';
+  }
+
   function newNode(shape, text){
     const id = 'n' + (nodeCounter++);
     const label = sanitizeLabel(text);
@@ -127,17 +136,44 @@ function createParser(){
     return src.replace(re, m => '"' + '_'.repeat(Math.max(0, m.length-2)) + '"');
   }
 
+  // Matches a function-style signature: two word-ish tokens (a return type
+  // and a name) followed by a parenthesized parameter list and an opening
+  // brace. Deliberately requires TWO tokens before the `(` so bare control
+  // structures like `if (...)` / `while (...)` / `for (...)` (only one
+  // token) never match this.
+  const FUNC_SIG_RE = /\b([\w:<>,\s\*&]+?)\s+(\w+)\s*\([^)]*\)\s*\{/g;
+
+  // Walks backward from `idx` over characters that could plausibly be part
+  // of a return-type prefix (the same char class FUNC_SIG_RE allows before
+  // a function name), so a bare `\bmain\(...)` match can be widened to
+  // include its `int `/`void `/etc. prefix. Without this, the otherFunctions
+  // count below would double-count main() itself: once as "main" (from the
+  // narrow \bmain match) and once as "int main(...)" (from the broader
+  // FUNC_SIG_RE scan), since the two wouldn't appear to overlap.
+  function extendSignatureStart(str, idx){
+    let k = idx;
+    while(k > 0 && /[\w:<>,\s\*&]/.test(str[k-1])) k--;
+    return k;
+  }
+
   function extractMainBody(origSrc, maskedSrc){
-    let braceIdx;
+    let braceIdx, sigStart, functionName;
     const mm = maskedSrc.match(/\bmain\s*\([^)]*\)\s*\{/);
     if(mm){
       braceIdx = mm.index + mm[0].length - 1;
+      sigStart = extendSignatureStart(maskedSrc, mm.index);
+      functionName = 'main';
     } else {
-      const m2 = maskedSrc.match(/\b[\w:<>,\s\*&]+?\s+\w+\s*\([^)]*\)\s*\{/);
-      if(m2) braceIdx = m2.index + m2[0].length - 1;
+      FUNC_SIG_RE.lastIndex = 0;
+      const m2 = FUNC_SIG_RE.exec(maskedSrc);
+      if(m2){
+        braceIdx = m2.index + m2[0].length - 1;
+        sigStart = m2.index;
+        functionName = m2[2];
+      }
     }
     if(braceIdx === undefined){
-      return { orig: origSrc, masked: maskedSrc, offset: 0 };
+      return { orig: origSrc, masked: maskedSrc, offset: 0, functionName: null, otherFunctions: 0 };
     }
     let depth = 1, j = braceIdx + 1;
     while(j < maskedSrc.length){
@@ -155,7 +191,26 @@ function createParser(){
       e.line = lineAt(braceIdx);
       throw e;
     }
-    return { orig: origSrc.slice(braceIdx+1, j), masked: maskedSrc.slice(braceIdx+1, j), offset: braceIdx + 1 };
+
+    // Count OTHER top-level function-looking signatures in the source, so
+    // the caller can warn the user that only `functionName` was converted
+    // and the rest of the file was silently ignored — previously this
+    // happened with no indication at all.
+    let otherFunctions = 0;
+    FUNC_SIG_RE.lastIndex = 0;
+    let fm;
+    while((fm = FUNC_SIG_RE.exec(maskedSrc)) !== null){
+      if(fm.index >= sigStart && fm.index < j) continue; // the function we already picked
+      otherFunctions++;
+    }
+
+    return {
+      orig: origSrc.slice(braceIdx+1, j),
+      masked: maskedSrc.slice(braceIdx+1, j),
+      offset: braceIdx + 1,
+      functionName,
+      otherFunctions
+    };
   }
 
   function classifyGeneric(text){
@@ -174,10 +229,33 @@ function createParser(){
     // Subroutine: a bare call to a (presumably user-defined) function/method,
     // i.e. the whole statement IS the call — not an assignment, not a
     // control-flow keyword. Matches the "Predefined Process" flowchart symbol.
-    if(/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*\s*\([^]*\)\s*;?\s*$/.test(t) && !/[=]/.test(t.replace(/[<>=!]=/g,''))){
+    if(/^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*\s*\([^]*\)\s*;?\s*$/.test(t) && !hasTopLevelAssignment(t)){
       return { type:'subroutine', text };
     }
     return { type:'simple', text };
+  }
+
+  // Scans for a bare '=' assignment OUTSIDE any parentheses/brackets — used
+  // to tell a real top-level assignment apart from an '=' that only appears
+  // *inside* the call's own argument list, e.g. a default parameter
+  // `foo(x = 5)` or an arrow-function argument `list.sort((a,b)=>a-b)`.
+  // The previous check (`!/[=]/.test(...)`) looked at the whole statement
+  // regardless of nesting, so any call whose arguments merely contained an
+  // '=' was wrongly disqualified from being classified as a subroutine call.
+  function hasTopLevelAssignment(str){
+    let depth = 0;
+    for(let i = 0; i < str.length; i++){
+      const c = str[i];
+      if(c === '(' || c === '[') depth++;
+      else if(c === ')' || c === ']') depth--;
+      else if(c === '=' && depth === 0){
+        const prev = str[i-1], next = str[i+1];
+        // skip ==, !=, <=, >=, => — none of those are an assignment
+        if(prev === '=' || prev === '!' || prev === '<' || prev === '>' || next === '=' || next === '>') continue;
+        return true;
+      }
+    }
+    return false;
   }
 
   function extractOutputLabel(text){
@@ -692,7 +770,7 @@ function createParser(){
         return exits;
       }
       case 'return': {
-        const id = newNode('end', stmt.text ? ('return ' + stmt.text) : 'return');
+        const id = newNode('end', endLabel(stmt.text));
         connect(entryExits, id);
         return [];
       }
@@ -756,15 +834,30 @@ function createParser(){
 
     const startId = newNode('start', 'เริ่มต้น');
     let exits = processStatements(stmts, [{ from:startId }]);
+    // Every path through the diagram must land on an explicit terminal
+    // node: `return` statements already got their own ("case 'return'"
+    // above), so this only fires for whatever's left over after control
+    // simply falls off the end of the function body without a return —
+    // guaranteeing the flowchart never ends on a dangling arrow.
     if(exits.length){
-      const endId = newNode('end', 'จบ');
+      const endId = newNode('end', endLabel(null));
       connect(exits, endId);
     }
 
     const lines = ['flowchart TD'];
     nodeDefs.forEach(d => lines.push('    ' + d));
     edgeDefs.forEach(e => lines.push('    ' + e));
-    return lines.join('\n');
+
+    // Warn (rather than silently ignore) when the source has more than one
+    // function-looking block: convertCodeToMermaid only ever converts a
+    // single function (main(), or the first one found), so anything else
+    // in the file was dropped. The UI layer decides how to surface this.
+    let warning = null;
+    if(body.otherFunctions > 0){
+      warning = `พบฟังก์ชันอื่นอีก ${body.otherFunctions} ฟังก์ชันในซอร์สโค้ด ระบบแปลงเป็นผังงานเฉพาะฟังก์ชัน "${body.functionName}" เท่านั้น ฟังก์ชันอื่นจะไม่ถูกแสดงในผังงานนี้`;
+    }
+
+    return { mermaid: lines.join('\n'), warning };
   }
 
 
@@ -774,6 +867,7 @@ function createParser(){
 // Convenience wrapper preserving the original module API: callers that
 // just want a one-shot conversion don't need to know about createParser()
 // at all. Each call spins up a brand-new isolated instance under the hood.
+// Returns { mermaid, warning } — see convertCodeToMermaid above.
 function convertCodeToMermaid(src){
   return createParser().convertCodeToMermaid(src);
 }
