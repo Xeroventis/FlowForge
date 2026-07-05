@@ -10,6 +10,24 @@ let nodeDefs = [];
 let edgeDefs = [];
 let contextStack = []; // stack of { type:'loop'|'switch', continueTarget, breakExits:[] }
 
+// The comment/directive-stripped source that all character offsets used
+// during parsing are relative to (see convertCodeToMermaid). Kept around
+// purely so lineAt() can translate an offset back into a 1-based line
+// number for error messages — nothing else reads from it.
+let sourceForLines = '';
+
+// Translates a character offset (into sourceForLines) into a 1-based line
+// number. Used to tell the user *where* in their code a parse error is,
+// instead of just that one happened.
+function lineAt(offset){
+  const lim = Math.max(0, Math.min(offset, sourceForLines.length));
+  let line = 1;
+  for(let k = 0; k < lim; k++){
+    if(sourceForLines[k] === '\n') line++;
+  }
+  return line;
+}
+
 function sanitizeLabel(text){
   if(!text) return ' ';
   // Truncate the RAW text first, then escape backslashes. If we escaped
@@ -112,7 +130,7 @@ function extractMainBody(origSrc, maskedSrc){
     if(m2) braceIdx = m2.index + m2[0].length - 1;
   }
   if(braceIdx === undefined){
-    return { orig: origSrc, masked: maskedSrc };
+    return { orig: origSrc, masked: maskedSrc, offset: 0 };
   }
   let depth = 1, j = braceIdx + 1;
   while(j < maskedSrc.length){
@@ -120,7 +138,17 @@ function extractMainBody(origSrc, maskedSrc){
     else if(maskedSrc[j] === '}'){ depth--; if(depth === 0) break; }
     j++;
   }
-  return { orig: origSrc.slice(braceIdx+1, j), masked: maskedSrc.slice(braceIdx+1, j) };
+  if(depth !== 0){
+    // Ran off the end of the file without finding the closing brace for
+    // this function — a missing/extra `{` or `}` somewhere in the body,
+    // which previously silently swallowed everything to the end of the
+    // file as if it belonged to this function. Point at the opening
+    // brace's line instead of guessing.
+    const e = new Error(`ไม่พบวงเล็บปีกกา "}" ที่ปิดคู่กับฟังก์ชัน ให้ตรงกัน (เปิดที่บรรทัดที่ ${lineAt(braceIdx)}) กรุณาตรวจสอบว่าใส่ปีกกาปิดครบทุกจุดหรือไม่`);
+    e.line = lineAt(braceIdx);
+    throw e;
+  }
+  return { orig: origSrc.slice(braceIdx+1, j), masked: maskedSrc.slice(braceIdx+1, j), offset: braceIdx + 1 };
 }
 
 function classifyGeneric(text){
@@ -281,7 +309,8 @@ function postProcessStmts(stmts, opts){
   return out;
 }
 
-function parseStatements(orig, masked){
+function parseStatements(orig, masked, baseOffset){
+  baseOffset = baseOffset || 0;
   let i = 0;
   const n = masked.length;
   const stmts = [];
@@ -295,7 +324,13 @@ function parseStatements(orig, masked){
       else if(masked[j] === closeCh){ depth--; if(depth === 0) return j; }
       j++;
     }
-    return n - 1;
+    // Reached the end of this scope without finding the matching
+    // bracket — genuinely unbalanced source, not something we can
+    // recover from by guessing. Point at the line where it opened.
+    const openLine = lineAt(baseOffset + start);
+    const e = new Error(`ไม่พบ "${closeCh}" ที่ปิดคู่กับ "${openCh}" ให้ตรงกัน (เปิดที่บรรทัดที่ ${openLine}) กรุณาตรวจสอบวงเล็บที่บรรทัดนี้`);
+    e.line = openLine;
+    throw e;
   }
   function readParenGroup(){
     skipWs();
@@ -311,7 +346,7 @@ function parseStatements(orig, masked){
       const start = i, end = findMatching('{', '}', i);
       const io = orig.slice(start+1, end), im = masked.slice(start+1, end);
       i = end + 1;
-      return parseStatements(io, im);
+      return parseStatements(io, im, baseOffset + start + 1);
     }
     const s = readSingleStatement();
     return s ? [s] : [];
@@ -394,7 +429,7 @@ function parseStatements(orig, masked){
     const body = readBlockOrSingle();
     return { type:'for', init:parts.init, cond:parts.cond, incr:parts.incr, body };
   }
-  function parseCases(orig2, masked2){
+  function parseCases(orig2, masked2, base2){
     const cases = [];
     const re = /\b(case\s+[^:]+|default)\s*:/g;
     const matches = []; let m;
@@ -405,7 +440,7 @@ function parseStatements(orig, masked){
       const label = orig2.slice(matches[k].index, matches[k].end-1).trim();
       cases.push({
         label,
-        body: parseStatements(orig2.slice(bodyStart, bodyEnd), masked2.slice(bodyStart, bodyEnd))
+        body: parseStatements(orig2.slice(bodyStart, bodyEnd), masked2.slice(bodyStart, bodyEnd), base2 + bodyStart)
       });
     }
     return cases;
@@ -415,7 +450,7 @@ function parseStatements(orig, masked){
     const expr = readParenGroup();
     skipWs();
     const start = i, end = findMatching('{', '}', i);
-    const cases = parseCases(orig.slice(start+1, end), masked.slice(start+1, end));
+    const cases = parseCases(orig.slice(start+1, end), masked.slice(start+1, end), baseOffset + start + 1);
     i = end + 1;
     return { type:'switch', expr, cases };
   }
@@ -450,29 +485,33 @@ function parseStatements(orig, masked){
   function readSingleStatement(){
     skipWs();
     if(i >= n) return null;
-    if(matchKeyword('if')) return readIf();
-    if(matchKeyword('while')) return readWhile();
-    if(matchKeyword('for')) return readFor();
-    if(matchKeyword('do')) return readDoWhile();
-    if(matchKeyword('switch')) return readSwitch();
-    if(matchKeyword('try')) return readTry();
-    if(matchKeyword('return')) return readReturn();
-    if(matchKeyword('throw')){
+    const stmtLine = lineAt(baseOffset + i);
+    let node;
+    if(matchKeyword('if')) node = readIf();
+    else if(matchKeyword('while')) node = readWhile();
+    else if(matchKeyword('for')) node = readFor();
+    else if(matchKeyword('do')) node = readDoWhile();
+    else if(matchKeyword('switch')) node = readSwitch();
+    else if(matchKeyword('try')) node = readTry();
+    else if(matchKeyword('return')) node = readReturn();
+    else if(matchKeyword('throw')){
       i += 5; skipWs();
       const start = i;
       skipToSemi();
       const text = orig.slice(start, Math.max(start, i-1)).trim();
-      return { type:'throw', text };
+      node = { type:'throw', text };
     }
-    if(matchKeyword('break')){ skipToSemi(); return { type:'break' }; }
-    if(matchKeyword('continue')){ skipToSemi(); return { type:'continue' }; }
-    if(masked[i] === '{'){
+    else if(matchKeyword('break')){ skipToSemi(); node = { type:'break' }; }
+    else if(matchKeyword('continue')){ skipToSemi(); node = { type:'continue' }; }
+    else if(masked[i] === '{'){
       const start = i, end = findMatching('{', '}', i);
       const io = orig.slice(start+1,end), im = masked.slice(start+1,end);
       i = end + 1;
-      return { type:'block', body: parseStatements(io, im) };
+      node = { type:'block', body: parseStatements(io, im, baseOffset + start + 1) };
     }
-    return readGenericStatement();
+    else node = readGenericStatement();
+    if(node && node.line === undefined) node.line = stmtLine;
+    return node;
   }
 
   while(true){
@@ -681,19 +720,31 @@ function processStatement(stmt, entryExits){
 
 function convertCodeToMermaid(src){
   nodeCounter = 0; connectorCounter = 0; nodeDefs = []; edgeDefs = []; contextStack = [];
-  let s = src.replace(/\/\*[\s\S]*?\*\//g, m => ' '.repeat(m.length));
+  // Block comments are blanked out char-by-char rather than with a flat
+  // ' '.repeat(m.length): the naive version collapses every newline the
+  // comment contained into spaces, which shortens the line count of
+  // everything after a multi-line comment and makes line numbers in
+  // error messages point at the wrong place. Keeping the '\n' characters
+  // (and only blanking everything else) preserves both the total length
+  // (so downstream character offsets don't shift) and the real line
+  // numbering.
+  let s = src.replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '));
   s = s.replace(/\/\/.*$/gm, m => ' '.repeat(m.length));
   s = s.replace(/^\s*#.*$/gm, '');
   s = s.replace(/^\s*using\s+namespace\s+\w+\s*;\s*$/gm, '');
   s = s.replace(/^\s*(import|package)\s+[^\n]*$/gm, '');
+  sourceForLines = s;
 
   const masked = maskLiterals(s);
   const body = extractMainBody(s, masked);
-  let stmts = parseStatements(body.orig, body.masked);
+  let stmts = parseStatements(body.orig, body.masked, body.offset);
   stmts = postProcessStmts(stmts, { hideSystem: true, groupOutputs: true });
 
   if(!stmts.length){
-    throw new Error('ไม่พบคำสั่งที่แปลงเป็นผังงานได้ ลองตรวจสอบว่าโค้ดมีฟังก์ชัน main() หรือมีคำสั่งอยู่จริง');
+    const hint = body.offset != null
+      ? ` (เริ่มตรวจสอบจากบรรทัดที่ ${lineAt(body.offset)})`
+      : '';
+    throw new Error('ไม่พบคำสั่งที่แปลงเป็นผังงานได้ ลองตรวจสอบว่าโค้ดมีฟังก์ชัน main() หรือมีคำสั่งอยู่จริง' + hint);
   }
 
   const startId = newNode('start', 'เริ่มต้น');
