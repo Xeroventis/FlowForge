@@ -22,6 +22,7 @@ initMermaidTheme();
 const codeEl = document.getElementById('code');
 const dirEl = document.getElementById('direction');
 const modeEl = document.getElementById('modeSelect');
+const funcScopeEl = document.getElementById('funcScope');
 const host = document.getElementById('diagramHost');
 const statusWrap = document.getElementById('status');
 const statusText = document.getElementById('statusText');
@@ -67,6 +68,7 @@ function saveAutosave(){
       code: codeEl.value,
       mode: modeEl.value,
       direction: dirEl.value,
+      funcScope: funcScopeEl.value,
       savedAt: Date.now()
     }));
   }catch(e){ /* storage full/unavailable — autosave is best-effort */ }
@@ -351,12 +353,18 @@ modeEl.addEventListener('change', ()=>{
   editorLabel.textContent = isCode ? 'ซอร์สโค้ด (C / C++ / Java / JavaScript)' : 'โค้ด Mermaid';
   document.getElementById('btnViewMmd').style.display = isCode ? 'inline-block' : 'none';
   document.getElementById('btnOpenFile').style.display = isCode ? 'inline-block' : 'none';
+  funcScopeEl.style.display = isCode ? 'inline-block' : 'none';
   buildSamples();
   if(isCode && !codeEl.value.trim()){
     codeEl.value = CODE_SAMPLES["C++ คำนวณเกรด"];
   } else if(!isCode && !codeEl.value.trim()){
     codeEl.value = MERMAID_DEFAULT;
   }
+  render();
+  saveAutosave();
+});
+
+funcScopeEl.addEventListener('change', ()=>{
   render();
   saveAutosave();
 });
@@ -390,7 +398,7 @@ async function render(){
       // bare string — `warning` is set when the source has more than one
       // function and only one of them could be converted, so the user
       // isn't left wondering why the rest of their file is missing.
-      const result = convertCodeToMermaid(raw);
+      const result = convertCodeToMermaid(raw, { mode: funcScopeEl.value === 'all' ? 'all' : 'main' });
       mermaidSrc = result.mermaid;
       lastGeneratedMermaid = mermaidSrc;
       setWarning(result.warning);
@@ -731,6 +739,7 @@ document.getElementById('fileInput').addEventListener('change', (e)=>{
     editorLabel.textContent = 'ซอร์สโค้ด (C / C++ / Java / JavaScript)';
     document.getElementById('btnViewMmd').style.display = 'inline-block';
     document.getElementById('btnOpenFile').style.display = 'inline-block';
+    funcScopeEl.style.display = 'inline-block';
     buildSamples();
     codeEl.value = String(reader.result || '');
     render();
@@ -759,6 +768,7 @@ document.getElementById('btnUseMmd').onclick = ()=>{
   modeEl.value = 'mermaid';
   editorLabel.textContent = 'โค้ด Mermaid';
   document.getElementById('btnViewMmd').style.display = 'none';
+  funcScopeEl.style.display = 'none';
   codeEl.value = lastGeneratedMermaid;
   buildSamples();
   mmdDrawer.classList.remove('open');
@@ -774,15 +784,18 @@ const restored = loadAutosave();
 if(restored){
   modeEl.value = restored.mode === 'code' ? 'code' : 'mermaid';
   dirEl.value = restored.direction || dirEl.value;
+  funcScopeEl.value = restored.funcScope === 'all' ? 'all' : 'main';
   const isCode = modeEl.value === 'code';
   editorLabel.textContent = isCode ? 'ซอร์สโค้ด (C / C++ / Java / JavaScript)' : 'โค้ด Mermaid';
   document.getElementById('btnViewMmd').style.display = isCode ? 'inline-block' : 'none';
   document.getElementById('btnOpenFile').style.display = isCode ? 'inline-block' : 'none';
+  funcScopeEl.style.display = isCode ? 'inline-block' : 'none';
   buildSamples();
   codeEl.value = restored.code;
 } else {
   document.getElementById('btnViewMmd').style.display = 'none';
   document.getElementById('btnOpenFile').style.display = 'none';
+  funcScopeEl.style.display = 'none';
   buildSamples();
   codeEl.value = MERMAID_DEFAULT;
 }
