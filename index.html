@@ -209,15 +209,12 @@
       <option value="main">เฉพาะ main()</option>
       <option value="all">ทุกฟังก์ชัน</option>
     </select>
-    <label class="btn" id="groupToggleWrap" title="รวมบรรทัดประกาศตัวแปร/กำหนดค่า array ที่ติดกันให้เป็นกล่องเดียว เพื่อให้ผังงานกระชับขึ้น" style="display:none; align-items:center; gap:6px;">
-      <input type="checkbox" id="groupStmts" checked style="cursor:pointer; margin:0;">
-      ย่นกล่องซ้ำ
-    </label>
     <select id="direction">
       <option value="TD">บนลงล่าง (TD)</option>
       <option value="LR">ซ้ายไปขวา (LR)</option>
       <option value="BT">ล่างขึ้นบน (BT)</option>
       <option value="RL">ขวาไปซ้าย (RL)</option>
+      <option value="SNAKE" title="พับผังงานยาวๆ เป็นหลายแถว สลับทิศซ้าย-ขวาในแต่ละแถว เพื่อประหยัดพื้นที่แนวนอน">งูเลื้อย (สลับซ้าย-ขวา)</option>
     </select>
     <input type="file" id="fileInput" accept=".c,.cpp,.cc,.cxx,.h,.hpp,.java,.js" style="display:none;">
     <button class="btn" id="btnOpenFile" title="เปิดไฟล์ .c / .cpp / .java / .js แล้วแปลงเป็นผังงานทันที">📂 เปิดไฟล์โค้ด</button>

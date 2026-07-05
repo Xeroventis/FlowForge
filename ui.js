@@ -23,8 +23,6 @@ const codeEl = document.getElementById('code');
 const dirEl = document.getElementById('direction');
 const modeEl = document.getElementById('modeSelect');
 const funcScopeEl = document.getElementById('funcScope');
-const groupToggleWrap = document.getElementById('groupToggleWrap');
-const groupStmtsEl = document.getElementById('groupStmts');
 const host = document.getElementById('diagramHost');
 const statusWrap = document.getElementById('status');
 const statusText = document.getElementById('statusText');
@@ -71,7 +69,6 @@ function saveAutosave(){
       mode: modeEl.value,
       direction: dirEl.value,
       funcScope: funcScopeEl.value,
-      groupStmts: groupStmtsEl.checked,
       savedAt: Date.now()
     }));
   }catch(e){ /* storage full/unavailable — autosave is best-effort */ }
@@ -357,7 +354,6 @@ modeEl.addEventListener('change', ()=>{
   document.getElementById('btnViewMmd').style.display = isCode ? 'inline-block' : 'none';
   document.getElementById('btnOpenFile').style.display = isCode ? 'inline-block' : 'none';
   funcScopeEl.style.display = isCode ? 'inline-block' : 'none';
-  groupToggleWrap.style.display = isCode ? 'inline-flex' : 'none';
   buildSamples();
   if(isCode && !codeEl.value.trim()){
     codeEl.value = CODE_SAMPLES["C++ คำนวณเกรด"];
@@ -373,11 +369,6 @@ funcScopeEl.addEventListener('change', ()=>{
   saveAutosave();
 });
 
-groupStmtsEl.addEventListener('change', ()=>{
-  render();
-  saveAutosave();
-});
-
 /* ---------------------------------------------------------------
    RENDERING
 --------------------------------------------------------------- */
@@ -385,8 +376,95 @@ function applyDirectionIfFlowchart(src){
   const dir = dirEl.value;
   const trimmed = src.trim();
   const m = trimmed.match(/^(flowchart|graph)\s+(TD|TB|LR|RL|BT)/i);
-  if(m) return trimmed.replace(/^(flowchart|graph)\s+(TD|TB|LR|RL|BT)/i, `$1 ${dir}`);
-  return src;
+  if(!m) return src;
+  if(dir === 'SNAKE') return snakeifyFlowchart(trimmed, m[1]);
+  return trimmed.replace(/^(flowchart|graph)\s+(TD|TB|LR|RL|BT)/i, `$1 ${dir}`);
+}
+
+// "งูเลื้อย" layout: instead of one long straight line of boxes, folds the
+// diagram into several horizontal rows stacked top-to-bottom, alternating
+// each row's internal direction LR / RL — so row 1 flows left→right, row 2
+// right→left, row 3 left→right again, etc. This keeps a long linear-ish
+// flowchart from becoming extremely wide (LR) or extremely tall (TD) by
+// trading some of that length for width, snake-style.
+//
+// Implementation: every node/subgraph definition line, in the order it
+// appears in the source, gets bucketed into a "row" (a mermaid subgraph
+// with an explicit `direction LR`/`RL`). Edge lines are left untouched and
+// emitted after all the rows — mermaid/dagre can route an edge across
+// subgraph boundaries just fine, and since the real edges still connect
+// row N's nodes to row N+1's nodes in sequence, dagre naturally stacks the
+// rows in the right top-to-bottom order without needing any invisible
+// helper edges.
+//
+// This is a best-effort heuristic, not a true graph-aware layout: it works
+// well for the roughly linear/branching chains this app generates from
+// source code, but a diagram with heavy branch-and-merge structure or
+// loop-back edges may not fold into a *perfectly* clean U/snake shape —
+// it will still render correctly, just without the tidy zigzag in those
+// spots.
+function snakeifyFlowchart(trimmedSrc, keyword){
+  const lines = trimmedSrc.split('\n');
+  const bodyLines = lines.slice(1); // drop the "flowchart TD" / "graph LR" header line
+
+  const rowUnits = [];   // { lines:[...] } — one node def, or one whole subgraph...end block
+  const edgeLines = [];  // "-->" edges, emitted after all rows
+  const tailLines = [];  // classDef/class/style/click/comments — passed through verbatim at the end
+
+  let i = 0;
+  while(i < bodyLines.length){
+    const line = bodyLines[i];
+    const t = line.trim();
+    if(!t){ i++; continue; }
+    if(/^%%/.test(t)){ tailLines.push(line); i++; continue; }
+    if(/^(classDef|class\s|style\s|click\s|linkStyle)/i.test(t)){ tailLines.push(line); i++; continue; }
+    if(/^subgraph\b/i.test(t)){
+      // Capture the whole subgraph...end block as ONE row unit (nested
+      // subgraphs, e.g. from "ทุกฟังก์ชัน" mode, aren't split further —
+      // snaking happens at the top level only).
+      let depth = 1;
+      const block = [line];
+      i++;
+      while(i < bodyLines.length && depth > 0){
+        const t2 = bodyLines[i].trim();
+        if(/^subgraph\b/i.test(t2)) depth++;
+        else if(/^end\b/i.test(t2)) depth--;
+        block.push(bodyLines[i]);
+        i++;
+      }
+      rowUnits.push(block);
+      continue;
+    }
+    if(/-->/.test(t)){ edgeLines.push(line); i++; continue; }
+    rowUnits.push([line]); // plain node definition
+    i++;
+  }
+
+  if(rowUnits.length === 0){
+    // Nothing to fold (e.g. an edge-only mermaid snippet with implicit node
+    // declarations) — fall back to a plain top-down layout instead.
+    return trimmedSrc.replace(/^(flowchart|graph)\s+\S+/i, `$1 TD`);
+  }
+
+  // Aim for a roughly square grid (~sqrt(N) nodes per row) so the result
+  // reads as a compact snake rather than one giant row or one node per row.
+  const rowSize = Math.max(2, Math.ceil(Math.sqrt(rowUnits.length)));
+
+  const out = [`${keyword} TD`];
+  let rowIndex = 0;
+  for(let start = 0; start < rowUnits.length; start += rowSize){
+    const chunk = rowUnits.slice(start, start + rowSize);
+    const rowDir = (rowIndex % 2 === 0) ? 'LR' : 'RL';
+    out.push(`    subgraph snakeRow${rowIndex}[" "]`);
+    out.push(`        direction ${rowDir}`);
+    chunk.forEach(block => block.forEach(l => out.push('        ' + l.trim())));
+    out.push('    end');
+    rowIndex++;
+  }
+  edgeLines.forEach(l => out.push('    ' + l.trim()));
+  tailLines.forEach(l => out.push(l));
+
+  return out.join('\n');
 }
 
 async function render(){
@@ -408,9 +486,7 @@ async function render(){
       // function and only one of them could be converted, so the user
       // isn't left wondering why the rest of their file is missing.
       const result = convertCodeToMermaid(raw, {
-        mode: funcScopeEl.value === 'all' ? 'all' : 'main',
-        groupDeclarations: groupStmtsEl.checked,
-        groupArrayAssigns: groupStmtsEl.checked
+        mode: funcScopeEl.value === 'all' ? 'all' : 'main'
       });
       mermaidSrc = result.mermaid;
       lastGeneratedMermaid = mermaidSrc;
@@ -816,7 +892,6 @@ document.getElementById('fileInput').addEventListener('change', (e)=>{
     document.getElementById('btnViewMmd').style.display = 'inline-block';
     document.getElementById('btnOpenFile').style.display = 'inline-block';
     funcScopeEl.style.display = 'inline-block';
-    groupToggleWrap.style.display = 'inline-flex';
     buildSamples();
     codeEl.value = String(reader.result || '');
     render();
@@ -846,7 +921,6 @@ document.getElementById('btnUseMmd').onclick = ()=>{
   editorLabel.textContent = 'โค้ด Mermaid';
   document.getElementById('btnViewMmd').style.display = 'none';
   funcScopeEl.style.display = 'none';
-  groupToggleWrap.style.display = 'none';
   codeEl.value = lastGeneratedMermaid;
   buildSamples();
   mmdDrawer.classList.remove('open');
@@ -863,20 +937,17 @@ if(restored){
   modeEl.value = restored.mode === 'code' ? 'code' : 'mermaid';
   dirEl.value = restored.direction || dirEl.value;
   funcScopeEl.value = restored.funcScope === 'all' ? 'all' : 'main';
-  groupStmtsEl.checked = restored.groupStmts !== false; // default ON for old autosaves without this field
   const isCode = modeEl.value === 'code';
   editorLabel.textContent = isCode ? 'ซอร์สโค้ด (C / C++ / Java / JavaScript)' : 'โค้ด Mermaid';
   document.getElementById('btnViewMmd').style.display = isCode ? 'inline-block' : 'none';
   document.getElementById('btnOpenFile').style.display = isCode ? 'inline-block' : 'none';
   funcScopeEl.style.display = isCode ? 'inline-block' : 'none';
-  groupToggleWrap.style.display = isCode ? 'inline-flex' : 'none';
   buildSamples();
   codeEl.value = restored.code;
 } else {
   document.getElementById('btnViewMmd').style.display = 'none';
   document.getElementById('btnOpenFile').style.display = 'none';
   funcScopeEl.style.display = 'none';
-  groupToggleWrap.style.display = 'none';
   buildSamples();
   codeEl.value = MERMAID_DEFAULT;
 }
