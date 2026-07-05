@@ -382,14 +382,13 @@ function applyDirectionIfFlowchart(src){
 }
 
 // "รูปตัว U" layout: instead of one long straight column of boxes running
-// top-to-bottom, folds the diagram into vertical columns placed left→right,
-// alternating each column's internal direction TB / BT — column 1 flows
-// top→bottom, column 2 bottom→top, column 3 top→bottom again, etc. With
-// exactly two columns this reads as a single U-turn (down the left side,
-// across, up the right side); longer diagrams get an extra bend per column
-// (U, then W, ...) rather than one ever-taller single line — trading
-// vertical length for horizontal width, capped so it doesn't just keep
-// growing straight down.
+// top-to-bottom, folds the diagram into exactly TWO vertical columns placed
+// left→right — column 1 flows top→bottom, column 2 flows bottom→top. That's
+// it: always a single clean U-turn (down the left side, across the bottom,
+// up the right side), never more than one bend regardless of how big the
+// diagram is — a bigger diagram just makes each column taller, rather than
+// adding extra columns/bends (which would start looking like a wavy snake
+// again instead of a clean U).
 //
 // Implementation mirrors the same idea as a row-based fold, just rotated:
 // every node/subgraph definition line, in source order, gets bucketed into
@@ -447,12 +446,12 @@ function foldIntoUShape(trimmedSrc, keyword){
     return trimmedSrc.replace(/^(flowchart|graph)\s+\S+/i, `$1 TD`);
   }
 
-  // Default to a true 2-column U (down the left, across, up the right).
-  // Only add more columns/bends once a single column would otherwise get
-  // too tall — trading vertical length for an extra fold instead.
+  // Always exactly 2 columns: down the left column, across, up the right
+  // column — a single clean U-turn every time. No extra columns/bends for
+  // bigger diagrams (that was the leftover "snake" behavior) — a large
+  // diagram just makes each column taller instead of adding more turns.
   const total = colUnits.length;
-  const MAX_COL_HEIGHT = 6;
-  const colCount = Math.max(2, Math.ceil(total / MAX_COL_HEIGHT));
+  const colCount = 2;
   const colSize = Math.ceil(total / colCount);
 
   const out = [`${keyword} LR`];
