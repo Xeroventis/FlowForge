@@ -455,11 +455,14 @@ function foldIntoUShape(trimmedSrc, keyword){
   const colSize = Math.ceil(total / colCount);
 
   const out = [`${keyword} LR`];
+  const colIds = [];
   let colIndex = 0;
   for(let start = 0; start < colUnits.length; start += colSize){
     const chunk = colUnits.slice(start, start + colSize);
     const colDir = (colIndex % 2 === 0) ? 'TB' : 'BT';
-    out.push(`    subgraph uCol${colIndex}[" "]`);
+    const colId = `uCol${colIndex}`;
+    colIds.push(colId);
+    out.push(`    subgraph ${colId}[" "]`);
     out.push(`        direction ${colDir}`);
     chunk.forEach(block => block.forEach(l => out.push('        ' + l.trim())));
     out.push('    end');
@@ -467,6 +470,13 @@ function foldIntoUShape(trimmedSrc, keyword){
   }
   edgeLines.forEach(l => out.push('    ' + l.trim()));
   tailLines.forEach(l => out.push(l));
+  // These subgraphs exist purely to control layout (which way each column
+  // flows) — they aren't meant to be visible boxes themselves, so strip
+  // their fill/border. Without this they'd inherit the theme's default
+  // cluster background (a solid color block behind every node in the
+  // column), hiding the individual per-shape colors set via the color
+  // wheel / theme.
+  colIds.forEach(id => out.push(`    style ${id} fill:transparent,stroke:transparent`));
 
   return out.join('\n');
 }
