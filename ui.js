@@ -144,6 +144,11 @@ let panY = 0;
 // shrink further than this just to fit on screen at all.
 let MIN_SCALE = 0.02;
 const MAX_SCALE = 8;
+// Single source of truth for zoom step, used by both the +/- buttons and
+// the mouse-wheel handler below. Previously these used different hardcoded
+// factors (1.25 for buttons, 1.1 for wheel), so wheel-zooming felt slower
+// / less responsive than clicking the buttons for no real reason.
+const ZOOM_STEP = 1.25;
 let renderCounter = 0;
 let lastGoodSVG = null;
 let lastGeneratedMermaid = null;
@@ -461,8 +466,8 @@ function applyZoom(){
 document.getElementById('btnRender').onclick = render;
 dirEl.onchange = render;
 
-document.getElementById('zoomIn').onclick = ()=>{ scale = Math.min(scale * 1.25, MAX_SCALE); applyZoom(); };
-document.getElementById('zoomOut').onclick = ()=>{ scale = Math.max(scale / 1.25, MIN_SCALE); applyZoom(); };
+document.getElementById('zoomIn').onclick = ()=>{ scale = Math.min(scale * ZOOM_STEP, MAX_SCALE); applyZoom(); };
+document.getElementById('zoomOut').onclick = ()=>{ scale = Math.max(scale / ZOOM_STEP, MIN_SCALE); applyZoom(); };
 document.getElementById('zoomReset').onclick = ()=>{ scale = 1; panX = 0; panY = 0; applyZoom(); };
 
 /* ---------------------------------------------------------------
@@ -525,10 +530,9 @@ host.addEventListener('wheel', (e)=>{
   const my = e.clientY - (hostBox.top + hostBox.height / 2);
 
   const oldScale = scale;
-  const zoomStep = 1.1;
   const newScale = e.deltaY < 0
-    ? Math.min(scale * zoomStep, MAX_SCALE)
-    : Math.max(scale / zoomStep, MIN_SCALE);
+    ? Math.min(scale * ZOOM_STEP, MAX_SCALE)
+    : Math.max(scale / ZOOM_STEP, MIN_SCALE);
 
   if(newScale === oldScale) return;
 
