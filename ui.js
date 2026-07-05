@@ -31,6 +31,36 @@ const mmdDrawer = document.getElementById('mmdDrawer');
 const mmdOutput = document.getElementById('mmdOutput');
 
 /* ---------------------------------------------------------------
+   AUTOSAVE (localStorage) — keeps whatever's in the editor safe
+   across accidental refreshes/tab closes. Best-effort: if
+   localStorage is unavailable (private browsing, quota, etc.) we
+   just silently skip saving/restoring rather than breaking the app.
+--------------------------------------------------------------- */
+const AUTOSAVE_KEY = 'flowchartStudio.autosave.v1';
+
+function loadAutosave(){
+  try{
+    const raw = localStorage.getItem(AUTOSAVE_KEY);
+    if(!raw) return null;
+    const data = JSON.parse(raw);
+    return (data && typeof data.code === 'string') ? data : null;
+  }catch(e){
+    return null;
+  }
+}
+
+function saveAutosave(){
+  try{
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({
+      code: codeEl.value,
+      mode: modeEl.value,
+      direction: dirEl.value,
+      savedAt: Date.now()
+    }));
+  }catch(e){ /* storage full/unavailable — autosave is best-effort */ }
+}
+
+/* ---------------------------------------------------------------
    DAY / NIGHT MODE
 --------------------------------------------------------------- */
 const themeToggleBtn = document.getElementById('themeToggle');
@@ -81,6 +111,10 @@ const debouncedColorRender = debounce(()=>{
   initMermaidTheme();
   if(lastGoodSVG !== null || codeEl.value.trim()) render();
 }, 180);
+
+const debouncedAutosave = debounce(saveAutosave, 400);
+codeEl.addEventListener('input', debouncedAutosave);
+dirEl.addEventListener('change', saveAutosave);
 
 colorPopover.querySelectorAll('input[type="color"]').forEach(input=>{
   input.addEventListener('input', ()=>{
@@ -277,7 +311,7 @@ function buildSamples(){
     const chip = document.createElement('div');
     chip.className = 'chip';
     chip.textContent = name;
-    chip.onclick = ()=>{ codeEl.value = lib[name]; render(); };
+    chip.onclick = ()=>{ codeEl.value = lib[name]; render(); saveAutosave(); };
     wrap.appendChild(chip);
   });
 }
@@ -302,6 +336,7 @@ modeEl.addEventListener('change', ()=>{
     codeEl.value = MERMAID_DEFAULT;
   }
   render();
+  saveAutosave();
 });
 
 /* ---------------------------------------------------------------
@@ -662,6 +697,7 @@ document.getElementById('fileInput').addEventListener('change', (e)=>{
     buildSamples();
     codeEl.value = String(reader.result || '');
     render();
+    saveAutosave();
     setStatus(true, 'โหลดไฟล์ ' + file.name + ' แล้ว');
   };
   reader.onerror = ()=>{
@@ -690,14 +726,27 @@ document.getElementById('btnUseMmd').onclick = ()=>{
   buildSamples();
   mmdDrawer.classList.remove('open');
   render();
+  saveAutosave();
 };
 
 codeEl.addEventListener('keydown', (e)=>{
   if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){ e.preventDefault(); render(); }
 });
 
-document.getElementById('btnViewMmd').style.display = 'none';
-document.getElementById('btnOpenFile').style.display = 'none';
-buildSamples();
-codeEl.value = MERMAID_DEFAULT;
+const restored = loadAutosave();
+if(restored){
+  modeEl.value = restored.mode === 'code' ? 'code' : 'mermaid';
+  dirEl.value = restored.direction || dirEl.value;
+  const isCode = modeEl.value === 'code';
+  editorLabel.textContent = isCode ? 'ซอร์สโค้ด (C / C++ / Java / JavaScript)' : 'โค้ด Mermaid';
+  document.getElementById('btnViewMmd').style.display = isCode ? 'inline-block' : 'none';
+  document.getElementById('btnOpenFile').style.display = isCode ? 'inline-block' : 'none';
+  buildSamples();
+  codeEl.value = restored.code;
+} else {
+  document.getElementById('btnViewMmd').style.display = 'none';
+  document.getElementById('btnOpenFile').style.display = 'none';
+  buildSamples();
+  codeEl.value = MERMAID_DEFAULT;
+}
 render();
